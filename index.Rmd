@@ -1,0 +1,123 @@
+---
+title: "VAR Project"
+author: "Sheridan Meek"
+date: "`r format(Sys.Date(),'%B %d, %Y')`"
+output: 
+  html_document:
+    df_print: paged
+    code_folding: "hide"
+    toc: yes
+    fig_caption: no
+    theme: cerulean
+    toc_float: no
+---
+
+GitHub Link: https://sheridanmeek.github.io
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls())
+graphics.off()
+```
+
+```{r downloading projects, message=FALSE}
+require(fpp3)
+require(tidyverse)
+require(dplyr)
+require(tidyquant)
+require(lubridate)
+require(timetk)
+require(vars)
+require(lmtest)
+require(kableExtra)
+require(frequencyConnectedness)
+```
+
+```{r Downloading Data}
+VarList <- c("MANEMP", "USINFO")
+Employees <- tq_get(VarList, get = "economic.data", from = "1939-01-01") %>%
+  mutate(Month = yearmonth(date)) %>% dplyr::select(-date) %>%
+  as_tsibble(index = Month, key = symbol)
+Xw <- Employees %>%
+  pivot_wider(names_from = symbol, values_from = price) %>%
+  as_tsibble()
+```
+
+# Introduction
+
+Since nearly a century ago, the landscape of the US economy has grown and changed in most, if not all, areas. There are constant shifts happening, and a key part of understanding, and possibly even anticipating those changes, is to investigate how the shifts interact with one another. There are endless relationships between economic factors to consider, but this paper will analyze the relationship (if any) between employment in the manufacturing industry and employment in the information industry. 
+Total US employment in the manufacturing industry (MANEMP) and total US employment in the information industry (USINFO) are both measured in thousands of persons, and the data is measured starting in 1939 to the present (March 2022). Employment in all sectors is typically considered to be related, but these two particular industries are interesting to look more closely at when you consider how the landscape of production and technology have changed in the past 80 years. The manufacturing industry refers most commonly to plants and factories that produce new products. Alternatively, the information industry refers to data communications, publishing, broadcasting and data processing. The information industry uses the internet often. As technology has skyrocketed in the past years, many manufacturing jobs have been taken over by automation, and there has been an increased demand for jobs that utilize knowledge of technology. Using VAR modeling, we will be diving deeper into how these two employment shifts interact – is the change in one a spillover from the other? Do they just happen to move similarly (although in opposite directions), or is there a dynamic relationship?
+To analyze this relationship, I will use VAR modeling. Specifically, I will begin with a generalized vector autoregression model (gVAR). I anticipate this model being the most effective in investigating these two variables because, although I do expect the two variables to have a dynamic relationship, I am not sure which may have the leading relationship. The generalized VAR model allows us to analyze the relationship in terms of “spillover effects”. 
+
+
+# Evaluating the Data
+
+The first step in investigating a relationship between any two variables is to look at them independently. Below are plots of both the manufacturing employment (left) and information employment (right). Taking a look at the graphs doesn’t reveal much in this case – while they overall follow the same pattern, the information industry has a steady incline while the manufacturing industry has many more ups and downs
+
+
+```{r Plotting Data}
+Employees %>%
+  ggplot(aes(x = Month, y = price)) +
+  geom_line() +
+  facet_wrap(vars(symbol), scales = "free_y", ncol = 2) +
+  labs(y = " ")
+```
+
+The plot below illustrates the monthly growth rates of manufacturing employment and industry employment. Again, the comparison of these two plots illustrates that manufacturing experiences more volatile growth rates, while the information industry has more constant growth (in this case, mostly upward). The most interesting thing to note in these plots is that the information industry seemed to be greatly affected by a shock in the early 1980s – possibly the recession. However, manufacturing employment did not seem to feel the same affect. This could be indication that there isn’t as much of a dynamic relationship as initially expected - this is where the VAR modeling will help us learn more. 
+
+
+
+```{r Investigating Monthly Growth Rates, results='hide'}
+growth <- Xw %>%
+  mutate(gMFG = 100 * difference(log(MANEMP)), 
+         gINFO  = 100 * difference(log(USINFO)),
+          ) %>% 
+        dplyr::select(gMFG,gINFO) %>% 
+        tidyr::drop_na() 
+growth
+```
+
+```{r Plotting Growth Rates}
+growth2 <- as.ts(growth) #, start = c(1939,2), frequency = 12)
+plot.ts(growth2,main="Manufacturing and Information: Monthly Employment Growth")
+```
+```{r Var Estimation, results='hide' }
+tmp <- VARselect(growth2,lag.max=12,type="const") 
+tmp$selection %>% 
+  kable(format = "html", table.attr = "style='width:20%;' ") %>% 
+  kableExtra::kable_styling() 
+```
+
+```{r Var Estimation cont., results='hide'}
+p <- tmp$selection[2]
+
+var.employee <- VAR(growth2,p=p,type="const")
+summary(var.employee)
+```
+
+# Using the VAR Model
+
+Using the generalized VAR model, the two main results we can analyze are the spillover table and the spillover index. 
+Below is the spillover table. This table shows the connectedness of the two industries’ employment. In each cell there is a measure of how much the fluctuations of each industry effects the other. This method can be especially helpful when considering many different variables, but for simplicity we are only considering the two here. The table can be interpreted as follows; 9.93 percent of the fluctuation in the information industry is influenced by changes in the manufacturing. We can also see that 8.66 percent of the fluctuation in the manufacturing industry is influenced by changes in the information industry. The information industry has a slightly higher influence over the manufacturing industry, but neither is very high. This seems to support the suspicion we had earlier – maybe there isn’t as much of a relationship as we would expect. 
+
+```{r Spillover Table}
+spilloverDY12(var.employee, n.ahead = 100, no.corr = FALSE) 
+```
+The last way we can evaluate the model is to consider the spillover index. The graph below shows the “connectedness” of employment in the two sectors. We can see that overall, the connectedness is fairly low, with occasional spikes. The most interesting part of this index is the dramatic decrease in connectedness around 1980. This makes sense when we look back at the original plots of the data. The information industry experienced dramatic change in the early 1980s while the manufacturing industry seemed relatively untouched, so it makes sense that there would be minimal connectedness in that period. 
+
+```{r Spillover Graph}
+rollsp <- spilloverRollingDY12(data = growth2, n.ahead = 120, no.corr = F, 
+                               func_est = "VAR", params_est = list(p = p, type = "const"), window = 84)
+```
+
+```{r Spillover Graph cont.}
+spillover <- overall(rollsp)
+spillover2 <- index(growth2)[84:length(index(growth2))]
+plot(spillover2,spillover[[1]],type="l",xlab="",ylab = "Total Connectedness", main = "Rolling Spillover Index")
+```
+
+# Conclusion
+Overall, there is so much variation in the connectedness, that although it was hopeful that a dynamic relationship was present between the two (which would mean they could be useful in forecasting one another), there is likely not a leading relationship here. A next step could be to consider more employment industries, the wages, or the production in each industry.  
+
+
+
